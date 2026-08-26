@@ -1,4 +1,5 @@
 import json
+import re
 
 import runner
 import subject
@@ -110,6 +111,20 @@ def test_config_hash_changes_when_planner_system_prompt_changes(monkeypatch):
     changed_hash = runner.compute_config_hash()
 
     assert changed_hash != original_hash
+
+
+def test_ollama_client_version_is_a_real_version_string(tmp_path):
+    contents = [VALID_PAYLOAD]
+    run_record, _ = runner.run_trials(
+        _make_chain_fn(contents), telemetries=["t0"], notes="version check", run_dir=tmp_path
+    )
+    version = run_record["ollama_client_version"]
+
+    assert version is not None
+    assert version != "None"
+    assert isinstance(version, str)
+    assert version != ""
+    assert re.match(r"^\d+\.\d+(\.\d+)?", version), version
 
 
 def test_config_hash_stable_regardless_of_notes(tmp_path):

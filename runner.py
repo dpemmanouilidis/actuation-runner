@@ -1,15 +1,32 @@
 import argparse
 import hashlib
+import importlib.metadata
 import json
+import secrets
 import statistics
 import time
 import uuid
+from pathlib import Path
 from datetime import datetime, timezone
 
 import ollama
 
 import classify
 import subject
+
+
+def _get_ollama_client_version():
+    """Look up the installed ollama package version.
+
+    ollama exposes no top-level __version__, so importlib.metadata is used
+    instead. If the lookup itself fails, the exception type name is recorded
+    as the field's value so a failed lookup is visible in the record rather
+    than indistinguishable from an absent one.
+    """
+    try:
+        return importlib.metadata.version("ollama")
+    except Exception as exc:
+        return type(exc).__name__
 
 
 def _canonical(obj):
@@ -106,7 +123,7 @@ def run_trials(chain_fn, telemetries, run_id=None, envelope=None, notes="", run_
         "carla_ticking": envelope.get("carla_ticking"),
         "notes": notes,
         "model": subject.MODEL,
-        "ollama_client_version": getattr(ollama, "__version__", None),
+        "ollama_client_version": _get_ollama_client_version(),
     }
 
     def _persist():
@@ -232,7 +249,74 @@ def _build_arg_parser():
     parser.add_argument("--carla-ticking", type=str, default="false")
     parser.add_argument("--notes", type=str, default="")
     parser.add_argument("--trials", type=int, default=1)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Use a canned in-process chain instead of calling Ollama. No network call is made.",
+    )
+    parser.add_argument(
+        "--dry-run-fail-at",
+        type=int,
+        default=None,
+        help="With --dry-run, raise on this trial index (0-based) to simulate an infrastructure failure.",
+    )
     return parser
+
+
+def make_run_id():
+    """Filesystem-safe, sortable run id: UTC timestamp plus a short random suffix."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    suffix = secrets.token_hex(4)
+    return f"{timestamp}-{suffix}"
+
+
+def make_run_dir(runs_root, run_id):
+    """Create runs_root/run_id, failing rather than overwriting an existing directory."""
+    run_dir = runs_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
+
+
+VALID_DRY_RUN_PAYLOAD = '{"drive_mode": "Sport", "max_acceleration_m_s2": 3.0}'
+
+
+class _DryRunResponse(dict):
+    """Mimics the ollama response object well enough for run_trials' extraction helpers."""
+
+    def __getattr__(self, item):
+        try:
+            return self[item]
+        except KeyError:
+            return None
+
+
+def _dry_run_chain_factory(fail_at=None):
+    """Build a chain_fn(telemetry) -> (content, response) that never calls Ollama.
+
+    Returns a canned, schema-valid response for every trial except, if fail_at is
+    given, raises on that trial index to simulate an infrastructure failure.
+    """
+    counter = {"i": -1}
+
+    def chain_fn(telemetry):
+        counter["i"] += 1
+        index = counter["i"]
+        if fail_at is not None and index == fail_at:
+            raise RuntimeError("simulated infrastructure failure (--dry-run-fail-at)")
+        content = VALID_DRY_RUN_PAYLOAD
+        response = _DryRunResponse({
+            "message": {"content": content},
+            "done_reason": "stop",
+            "total_duration": 0,
+            "load_duration": 0,
+            "prompt_eval_count": 0,
+            "prompt_eval_duration": 0,
+            "eval_count": 0,
+            "eval_duration": 0,
+        })
+        return content, response
+
+    return chain_fn
 
 
 def main():
@@ -247,8 +331,17 @@ def main():
 
     telemetries = [f"Vehicle Speed: {60 + i} km/h. Traffic: Clear." for i in range(args.trials)]
 
+    if args.dry_run:
+        chain_fn = _dry_run_chain_factory(fail_at=args.dry_run_fail_at)
+    else:
+        chain_fn = subject.run_chain
+
+    run_id = make_run_id()
+    runs_root = Path(__file__).resolve().parent / "runs"
+    run_dir = make_run_dir(runs_root, run_id)
+
     run_record, trial_records = run_trials(
-        subject.run_chain, telemetries, envelope=envelope, notes=args.notes
+        chain_fn, telemetries, run_id=run_id, envelope=envelope, notes=args.notes, run_dir=run_dir
     )
 
     summary = summarize(trial_records)
