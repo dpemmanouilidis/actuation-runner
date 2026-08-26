@@ -103,6 +103,53 @@ def test_cli_mid_run_failure_leaves_incomplete_status_on_disk():
     assert infra_rows[0]["trial_index"] == 2
 
 
+def test_cli_trial_records_have_exact_twenty_key_set():
+    runs_root = REPO_ROOT / "runs"
+    before = set(_find_run_dirs(runs_root))
+
+    result = _run_cli(
+        ["--dry-run", "--trials", "2", "--carla-present", "false", "--notes", "field set check"],
+        cwd=REPO_ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+
+    after = set(_find_run_dirs(runs_root))
+    new_dirs = after - before
+    assert len(new_dirs) == 1
+    run_dir = new_dirs.pop()
+
+    with open(run_dir / "trials.json", encoding="utf-8") as f:
+        trial_records = json.load(f)
+
+    assert len(trial_records) == 2
+
+    expected_keys = {
+        "trial_index",
+        "category",
+        "all_violations",
+        "profiler_done_reason",
+        "planner_done_reason",
+        "planner_raw_response_repr",
+        "planner_response_content_len",
+        "profiler_total_duration",
+        "profiler_load_duration",
+        "profiler_prompt_eval_count",
+        "profiler_prompt_eval_duration",
+        "profiler_eval_count",
+        "profiler_eval_duration",
+        "planner_total_duration",
+        "planner_load_duration",
+        "planner_prompt_eval_count",
+        "planner_prompt_eval_duration",
+        "planner_eval_count",
+        "planner_eval_duration",
+        "wall_clock_s",
+    }
+
+    for record in trial_records:
+        assert set(record.keys()) == expected_keys
+
+
 def test_cli_output_files_are_utf8_without_bom():
     runs_root = REPO_ROOT / "runs"
     before = set(_find_run_dirs(runs_root))
