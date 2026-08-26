@@ -50,9 +50,10 @@ def planner_call_args(profile_sentence):
 def run_chain(telemetry):
     """Run the Profiler->Planner chain against Ollama.
 
-    Returns (planner_content, planner_response) where planner_content is the raw
-    string content of the Planner's response and planner_response is the full
-    response object returned by ollama.chat() for the Planner call.
+    Returns (planner_content, planner_response, profiler_response) where
+    planner_content is the raw string content of the Planner's response, and
+    planner_response / profiler_response are the full response objects
+    returned by ollama.chat() for each call site.
     """
     profiler_response = ollama.chat(**profiler_call_args(telemetry))
     profile_sentence = profiler_response["message"]["content"]
@@ -60,4 +61,4 @@ def run_chain(telemetry):
     planner_response = ollama.chat(**planner_call_args(profile_sentence))
     planner_content = planner_response["message"]["content"]
 
-    return planner_content, planner_response
+    return planner_content, planner_response, profiler_response

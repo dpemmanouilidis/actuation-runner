@@ -33,7 +33,8 @@ VALID_PAYLOAD = '{"drive_mode": "Sport", "max_acceleration_m_s2": 3.0}'
 
 
 def _make_chain_fn(contents, fail_on_index=None):
-    """Build a chain_fn(telemetry) -> (content, response) driven by an index counter."""
+    """Build a chain_fn(telemetry) -> (content, planner_response, profiler_response)
+    driven by an index counter."""
     counter = {"i": -1}
 
     def chain_fn(telemetry):
@@ -42,8 +43,9 @@ def _make_chain_fn(contents, fail_on_index=None):
         if fail_on_index is not None and idx == fail_on_index:
             raise RuntimeError("simulated infrastructure failure")
         content = contents[idx]
-        response = _fake_response(content)
-        return content, response
+        planner_response = _fake_response(content)
+        profiler_response = _fake_response("profile sentence")
+        return content, planner_response, profiler_response
 
     return chain_fn
 

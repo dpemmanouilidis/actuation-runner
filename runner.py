@@ -67,17 +67,19 @@ def _utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+TIMING_FIELDS = [
+    "total_duration",
+    "load_duration",
+    "prompt_eval_count",
+    "prompt_eval_duration",
+    "eval_count",
+    "eval_duration",
+]
+
+
 def _extract_timing_fields(response):
-    fields = [
-        "total_duration",
-        "load_duration",
-        "prompt_eval_count",
-        "prompt_eval_duration",
-        "eval_count",
-        "eval_duration",
-    ]
     result = {}
-    for field in fields:
+    for field in TIMING_FIELDS:
         if hasattr(response, field):
             result[field] = getattr(response, field)
         elif isinstance(response, dict):
@@ -98,9 +100,9 @@ def _extract_done_reason(response):
 def run_trials(chain_fn, telemetries, run_id=None, envelope=None, notes="", run_dir=None):
     """Run `len(telemetries)` trials through chain_fn.
 
-    chain_fn(telemetry) -> (content_str, response_obj), matching subject.run_chain.
-    Writes a run record and per-trial records to run_dir (if given) as JSON.
-    Returns (run_record, trial_records).
+    chain_fn(telemetry) -> (content_str, planner_response_obj, profiler_response_obj),
+    matching subject.run_chain. Writes a run record and per-trial records to
+    run_dir (if given) as JSON. Returns (run_record, trial_records).
     """
     if run_id is None:
         run_id = str(uuid.uuid4())
@@ -138,22 +140,19 @@ def run_trials(chain_fn, telemetries, run_id=None, envelope=None, notes="", run_
     for index, telemetry in enumerate(telemetries):
         start = time.perf_counter()
         try:
-            content, response = chain_fn(telemetry)
+            content, planner_response, profiler_response = chain_fn(telemetry)
         except Exception as exc:
             wall_clock = time.perf_counter() - start
             trial_records.append({
                 "trial_index": index,
                 "category": "infrastructure_error",
                 "all_violations": [],
-                "done_reason": None,
-                "raw_response_repr": repr(exc),
-                "response_content_len": 0,
-                "total_duration": None,
-                "load_duration": None,
-                "prompt_eval_count": None,
-                "prompt_eval_duration": None,
-                "eval_count": None,
-                "eval_duration": None,
+                "profiler_done_reason": None,
+                "planner_done_reason": None,
+                "planner_raw_response_repr": repr(exc),
+                "planner_response_content_len": 0,
+                **{f"profiler_{field}": None for field in TIMING_FIELDS},
+                **{f"planner_{field}": None for field in TIMING_FIELDS},
                 "wall_clock_s": wall_clock,
             })
             run_record["trials_completed"] = trials_completed
@@ -162,17 +161,21 @@ def run_trials(chain_fn, telemetries, run_id=None, envelope=None, notes="", run_
 
         wall_clock = time.perf_counter() - start
         classification = classify.classify(content)
-        timing = _extract_timing_fields(response)
-        done_reason = _extract_done_reason(response)
+        profiler_timing = {f"profiler_{k}": v for k, v in _extract_timing_fields(profiler_response).items()}
+        planner_timing = {f"planner_{k}": v for k, v in _extract_timing_fields(planner_response).items()}
+        profiler_done_reason = _extract_done_reason(profiler_response)
+        planner_done_reason = _extract_done_reason(planner_response)
 
         trial_records.append({
             "trial_index": index,
             "category": classification["category"],
             "all_violations": classification["all_violations"],
-            "done_reason": done_reason,
-            "raw_response_repr": repr(content),
-            "response_content_len": len(content),
-            **timing,
+            "profiler_done_reason": profiler_done_reason,
+            "planner_done_reason": planner_done_reason,
+            "planner_raw_response_repr": repr(content),
+            "planner_response_content_len": len(content),
+            **profiler_timing,
+            **planner_timing,
             "wall_clock_s": wall_clock,
         })
 
@@ -291,10 +294,13 @@ class _DryRunResponse(dict):
 
 
 def _dry_run_chain_factory(fail_at=None):
-    """Build a chain_fn(telemetry) -> (content, response) that never calls Ollama.
+    """Build a chain_fn(telemetry) -> (content, planner_response, profiler_response)
+    that never calls Ollama.
 
-    Returns a canned, schema-valid response for every trial except, if fail_at is
+    Returns canned, schema-valid responses for every trial except, if fail_at is
     given, raises on that trial index to simulate an infrastructure failure.
+    Profiler and Planner timing values are deliberately distinct so downstream
+    consumers can verify the two are not aliased.
     """
     counter = {"i": -1}
 
@@ -304,17 +310,27 @@ def _dry_run_chain_factory(fail_at=None):
         if fail_at is not None and index == fail_at:
             raise RuntimeError("simulated infrastructure failure (--dry-run-fail-at)")
         content = VALID_DRY_RUN_PAYLOAD
-        response = _DryRunResponse({
+        profiler_response = _DryRunResponse({
+            "message": {"content": "dry-run profile sentence"},
+            "done_reason": "stop",
+            "total_duration": 1,
+            "load_duration": 2,
+            "prompt_eval_count": 3,
+            "prompt_eval_duration": 4,
+            "eval_count": 5,
+            "eval_duration": 6,
+        })
+        planner_response = _DryRunResponse({
             "message": {"content": content},
             "done_reason": "stop",
-            "total_duration": 0,
-            "load_duration": 0,
-            "prompt_eval_count": 0,
-            "prompt_eval_duration": 0,
-            "eval_count": 0,
-            "eval_duration": 0,
+            "total_duration": 100,
+            "load_duration": 200,
+            "prompt_eval_count": 300,
+            "prompt_eval_duration": 400,
+            "eval_count": 500,
+            "eval_duration": 600,
         })
-        return content, response
+        return content, planner_response, profiler_response
 
     return chain_fn
 

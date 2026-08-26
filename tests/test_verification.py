@@ -17,16 +17,17 @@ class FakeResponse(dict):
             return None
 
 
-def _canned_response(content):
+def _canned_response(content, done_reason="stop", total_duration=123456, load_duration=111,
+                      prompt_eval_count=12, prompt_eval_duration=222, eval_count=34, eval_duration=333):
     return FakeResponse({
         "message": {"content": content},
-        "done_reason": "stop",
-        "total_duration": 123456,
-        "load_duration": 111,
-        "prompt_eval_count": 12,
-        "prompt_eval_duration": 222,
-        "eval_count": 34,
-        "eval_duration": 333,
+        "done_reason": done_reason,
+        "total_duration": total_duration,
+        "load_duration": load_duration,
+        "prompt_eval_count": prompt_eval_count,
+        "prompt_eval_duration": prompt_eval_duration,
+        "eval_count": eval_count,
+        "eval_duration": eval_duration,
     })
 
 
@@ -36,7 +37,7 @@ def test_written_trial_record_has_all_required_fields(tmp_path):
     content = VALID_PAYLOAD
 
     def chain_fn(telemetry):
-        return content, _canned_response(content)
+        return content, _canned_response(content), _canned_response("profile sentence")
 
     runner.run_trials(chain_fn, telemetries=["t0"], run_dir=tmp_path)
 
@@ -47,34 +48,78 @@ def test_written_trial_record_has_all_required_fields(tmp_path):
     record = trial_records[0]
 
     required_keys = {
-        "total_duration",
-        "load_duration",
-        "prompt_eval_count",
-        "prompt_eval_duration",
-        "eval_count",
-        "eval_duration",
-        "done_reason",
-        "response_content_len",
-        "raw_response_repr",
+        "profiler_total_duration",
+        "profiler_load_duration",
+        "profiler_prompt_eval_count",
+        "profiler_prompt_eval_duration",
+        "profiler_eval_count",
+        "profiler_eval_duration",
+        "planner_total_duration",
+        "planner_load_duration",
+        "planner_prompt_eval_count",
+        "planner_prompt_eval_duration",
+        "planner_eval_count",
+        "planner_eval_duration",
+        "profiler_done_reason",
+        "planner_done_reason",
+        "planner_response_content_len",
+        "planner_raw_response_repr",
         "trial_index",
         "category",
         "all_violations",
+        "wall_clock_s",
     }
     missing = required_keys - set(record.keys())
     assert not missing, f"missing keys in written trial record: {missing}"
+    assert len(required_keys) == 20
+    assert set(record.keys()) == required_keys
 
-    assert record["total_duration"] == 123456
-    assert record["load_duration"] == 111
-    assert record["prompt_eval_count"] == 12
-    assert record["prompt_eval_duration"] == 222
-    assert record["eval_count"] == 34
-    assert record["eval_duration"] == 333
-    assert record["done_reason"] == "stop"
-    assert record["response_content_len"] == len(content)
-    assert record["raw_response_repr"] == repr(content)
+    assert record["planner_total_duration"] == 123456
+    assert record["planner_load_duration"] == 111
+    assert record["planner_prompt_eval_count"] == 12
+    assert record["planner_prompt_eval_duration"] == 222
+    assert record["planner_eval_count"] == 34
+    assert record["planner_eval_duration"] == 333
+    assert record["planner_done_reason"] == "stop"
+    assert record["planner_response_content_len"] == len(content)
+    assert record["planner_raw_response_repr"] == repr(content)
     assert record["trial_index"] == 0
     assert record["category"] == "pass"
     assert record["all_violations"] == []
+
+
+# --- 1b. Anti-aliasing test -------------------------------------------------
+
+def test_profiler_and_planner_timing_fields_do_not_alias(tmp_path):
+    content = VALID_PAYLOAD
+
+    def chain_fn(telemetry):
+        planner_response = _canned_response(
+            content, total_duration=100, load_duration=200,
+            prompt_eval_count=300, prompt_eval_duration=400,
+            eval_count=500, eval_duration=600, done_reason="stop",
+        )
+        profiler_response = _canned_response(
+            "profile sentence", total_duration=1, load_duration=2,
+            prompt_eval_count=3, prompt_eval_duration=4,
+            eval_count=5, eval_duration=6, done_reason="length",
+        )
+        return content, planner_response, profiler_response
+
+    runner.run_trials(chain_fn, telemetries=["t0"], run_dir=tmp_path)
+
+    with open(tmp_path / "trials.json", encoding="utf-8") as f:
+        trial_records = json.load(f)
+
+    record = trial_records[0]
+
+    for field in ["total_duration", "load_duration", "prompt_eval_count",
+                  "prompt_eval_duration", "eval_count", "eval_duration"]:
+        assert record[f"profiler_{field}"] != record[f"planner_{field}"], (
+            f"profiler_{field} and planner_{field} must not alias"
+        )
+
+    assert record["profiler_done_reason"] != record["planner_done_reason"]
 
 
 # --- 2. Subject call-site test --------------------------------------------
