@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import importlib.metadata
+import inspect
 import json
 import secrets
 import statistics
@@ -33,13 +34,49 @@ def _canonical(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
-def compute_config_hash():
-    """Hash the per-call-site configuration of both Profiler and Planner calls.
+def _telemetry_distance_m(index):
+    """Deterministic distance-to-hazard sequence (meters).
 
-    Only the fixed configuration is hashed (model, system prompt, few-shot
-    messages, options dict, format argument) -- not per-trial telemetry or
-    profile-sentence text, so the hash is stable across trials and only
-    changes when the call-site configuration itself changes.
+    Alternates each trial across the 10.0 m Blocked/Clear threshold so both
+    branches occur for any --trials >= 2. Placeholder for blocker 10's
+    scenario design, not a scenario design itself.
+    """
+    return 15.0 if index % 2 == 0 else 5.0
+
+
+def _telemetry_speed_m_s(index):
+    """Deterministic vehicle speed sequence (m/s)."""
+    return 16.0 + index * 0.5
+
+
+def build_telemetry(index):
+    """Build the telemetry string for trial `index`.
+
+    Reproduces the CARLA telemetry construction (three fields -- Vehicle
+    Speed, Traffic, Distance to Hazard; speed in m/s; a Blocked/Clear
+    traffic status derived from a 10.0 m hazard-distance threshold).
+    """
+    speed = _telemetry_speed_m_s(index)
+    distance = _telemetry_distance_m(index)
+    traffic_status = "Blocked" if distance < 10.0 else "Clear"
+    return (
+        f"Vehicle Speed: {speed:.2f} m/s. "
+        f"Traffic: {traffic_status}. "
+        f"Distance to Hazard: {distance:.1f}m."
+    )
+
+
+def compute_config_hash():
+    """Hash the per-call-site configuration of both Profiler and Planner calls,
+    plus the telemetry construction.
+
+    Only fixed configuration is hashed: model, system prompt, few-shot
+    messages, options dict, and format argument for the two call sites, and
+    the source text of the telemetry-construction functions -- not per-trial
+    telemetry strings, profile-sentence text, or rendered values. The hash is
+    stable across trials within a run (it never depends on a trial's actual
+    inputs) and changes when the call-site configuration or the telemetry
+    construction itself changes.
     """
     profiler_config = {
         "model": subject.MODEL,
@@ -58,7 +95,12 @@ def compute_config_hash():
         "options": None,
         "format": "json",
     }
-    combined = {"profiler": profiler_config, "planner": planner_config}
+    telemetry_config = {
+        "distance_formula": inspect.getsource(_telemetry_distance_m),
+        "speed_formula": inspect.getsource(_telemetry_speed_m_s),
+        "template_formula": inspect.getsource(build_telemetry),
+    }
+    combined = {"profiler": profiler_config, "planner": planner_config, "telemetry": telemetry_config}
     canonical = _canonical(combined)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -97,12 +139,34 @@ def _extract_done_reason(response):
     return None
 
 
-def run_trials(chain_fn, telemetries, run_id=None, envelope=None, notes="", run_dir=None):
+def _extract_message_content(response):
+    if hasattr(response, "message"):
+        message = response.message
+    elif isinstance(response, dict):
+        message = response.get("message")
+    else:
+        message = None
+
+    if message is None:
+        return None
+    if hasattr(message, "content"):
+        return message.content
+    if isinstance(message, dict):
+        return message.get("content")
+    return None
+
+
+def run_trials(chain_fn, telemetries, run_id=None, envelope=None, notes="", run_dir=None,
+                dry_run=False, dry_run_fail_at=None):
     """Run `len(telemetries)` trials through chain_fn.
 
     chain_fn(telemetry) -> (content_str, planner_response_obj, profiler_response_obj),
     matching subject.run_chain. Writes a run record and per-trial records to
     run_dir (if given) as JSON. Returns (run_record, trial_records).
+
+    dry_run / dry_run_fail_at are recorded verbatim into run_record for
+    provenance; they do not select chain_fn themselves -- the caller already
+    decided that. Defaults (False / None) describe a live run.
     """
     if run_id is None:
         run_id = str(uuid.uuid4())
@@ -126,6 +190,8 @@ def run_trials(chain_fn, telemetries, run_id=None, envelope=None, notes="", run_
         "notes": notes,
         "model": subject.MODEL,
         "ollama_client_version": _get_ollama_client_version(),
+        "dry_run": dry_run,
+        "dry_run_fail_at": dry_run_fail_at,
     }
 
     def _persist():
@@ -147,6 +213,8 @@ def run_trials(chain_fn, telemetries, run_id=None, envelope=None, notes="", run_
                 "trial_index": index,
                 "category": "infrastructure_error",
                 "all_violations": [],
+                "telemetry": telemetry,
+                "profiler_response_content": None,
                 "profiler_done_reason": None,
                 "planner_done_reason": None,
                 "planner_raw_response_repr": repr(exc),
@@ -165,11 +233,14 @@ def run_trials(chain_fn, telemetries, run_id=None, envelope=None, notes="", run_
         planner_timing = {f"planner_{k}": v for k, v in _extract_timing_fields(planner_response).items()}
         profiler_done_reason = _extract_done_reason(profiler_response)
         planner_done_reason = _extract_done_reason(planner_response)
+        profiler_response_content = _extract_message_content(profiler_response)
 
         trial_records.append({
             "trial_index": index,
             "category": classification["category"],
             "all_violations": classification["all_violations"],
+            "telemetry": telemetry,
+            "profiler_response_content": profiler_response_content,
             "profiler_done_reason": profiler_done_reason,
             "planner_done_reason": planner_done_reason,
             "planner_raw_response_repr": repr(content),
@@ -263,6 +334,13 @@ def _build_arg_parser():
         default=None,
         help="With --dry-run, raise on this trial index (0-based) to simulate an infrastructure failure.",
     )
+    parser.add_argument(
+        "--runs-root",
+        type=str,
+        default=None,
+        help="Directory under which the run's output directory is created. "
+        "Defaults to the repo-local runs/ directory next to this file.",
+    )
     return parser
 
 
@@ -345,7 +423,7 @@ def main():
         "carla_ticking": args.carla_ticking,
     }
 
-    telemetries = [f"Vehicle Speed: {60 + i} km/h. Traffic: Clear." for i in range(args.trials)]
+    telemetries = [build_telemetry(i) for i in range(args.trials)]
 
     if args.dry_run:
         chain_fn = _dry_run_chain_factory(fail_at=args.dry_run_fail_at)
@@ -353,11 +431,12 @@ def main():
         chain_fn = subject.run_chain
 
     run_id = make_run_id()
-    runs_root = Path(__file__).resolve().parent / "runs"
+    runs_root = Path(args.runs_root) if args.runs_root else Path(__file__).resolve().parent / "runs"
     run_dir = make_run_dir(runs_root, run_id)
 
     run_record, trial_records = run_trials(
-        chain_fn, telemetries, run_id=run_id, envelope=envelope, notes=args.notes, run_dir=run_dir
+        chain_fn, telemetries, run_id=run_id, envelope=envelope, notes=args.notes, run_dir=run_dir,
+        dry_run=args.dry_run, dry_run_fail_at=args.dry_run_fail_at,
     )
 
     summary = summarize(trial_records)

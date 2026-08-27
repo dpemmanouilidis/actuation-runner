@@ -7,9 +7,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNNER_PY = REPO_ROOT / "runner.py"
 
 
-def _run_cli(args, cwd):
+def _run_cli(args, cwd, runs_root):
     return subprocess.run(
-        [sys.executable, str(RUNNER_PY), *args],
+        [sys.executable, str(RUNNER_PY), *args, "--runs-root", str(runs_root)],
         cwd=str(cwd),
         capture_output=True,
         text=True,
@@ -23,23 +23,19 @@ def _find_run_dirs(runs_root):
     return sorted(p for p in runs_root.iterdir() if p.is_dir())
 
 
-def test_cli_end_to_end_creates_run_dir_with_both_files():
-    # Copy nothing: run with cwd=tmp_path so runs/ lands under tmp_path? No --
-    # runner.py resolves runs/ relative to its own file location, not cwd.
-    # So point at the real repo's runs dir and clean up only the dirs we create.
-    runs_root = REPO_ROOT / "runs"
-    before = set(_find_run_dirs(runs_root))
+def test_cli_end_to_end_creates_run_dir_with_both_files(tmp_path):
+    runs_root = tmp_path / "runs"
 
     result = _run_cli(
         ["--dry-run", "--trials", "3", "--carla-present", "false", "--notes", "cli test complete"],
         cwd=REPO_ROOT,
+        runs_root=runs_root,
     )
     assert result.returncode == 0, result.stderr
 
-    after = set(_find_run_dirs(runs_root))
-    new_dirs = after - before
-    assert len(new_dirs) == 1
-    run_dir = new_dirs.pop()
+    run_dirs = _find_run_dirs(runs_root)
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
 
     run_json_path = run_dir / "run.json"
     trials_json_path = run_dir / "trials.json"
@@ -61,11 +57,12 @@ def test_cli_end_to_end_creates_run_dir_with_both_files():
     assert run_record["carla_ticking"] == "false"
     assert run_record["notes"] == "cli test complete"
     assert run_record["status"] == "complete"
+    assert run_record["dry_run"] is True
+    assert run_record["dry_run_fail_at"] is None
 
 
-def test_cli_mid_run_failure_leaves_incomplete_status_on_disk():
-    runs_root = REPO_ROOT / "runs"
-    before = set(_find_run_dirs(runs_root))
+def test_cli_mid_run_failure_leaves_incomplete_status_on_disk(tmp_path):
+    runs_root = tmp_path / "runs"
 
     result = _run_cli(
         [
@@ -80,43 +77,46 @@ def test_cli_mid_run_failure_leaves_incomplete_status_on_disk():
             "cli test incomplete",
         ],
         cwd=REPO_ROOT,
+        runs_root=runs_root,
     )
     # The CLI process itself does not crash: run_trials catches the chain_fn
     # exception internally and continues to the next trial.
     assert result.returncode == 0, result.stderr
 
-    after = set(_find_run_dirs(runs_root))
-    new_dirs = after - before
-    assert len(new_dirs) == 1
-    run_dir = new_dirs.pop()
+    run_dirs = _find_run_dirs(runs_root)
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
 
     with open(run_dir / "run.json", encoding="utf-8") as f:
         run_record = json.load(f)
 
     assert run_record["status"] == "incomplete"
     assert run_record["trials_intended"] == 5
+    assert run_record["dry_run"] is True
+    assert run_record["dry_run_fail_at"] == 2
 
     with open(run_dir / "trials.json", encoding="utf-8") as f:
         trial_records = json.load(f)
     infra_rows = [r for r in trial_records if r["category"] == "infrastructure_error"]
     assert len(infra_rows) == 1
     assert infra_rows[0]["trial_index"] == 2
+    assert infra_rows[0]["telemetry"]
+    assert infra_rows[0]["profiler_response_content"] is None
 
 
-def test_cli_trial_records_have_exact_twenty_key_set():
-    runs_root = REPO_ROOT / "runs"
-    before = set(_find_run_dirs(runs_root))
+def test_cli_trial_records_have_exact_twenty_two_key_set(tmp_path):
+    runs_root = tmp_path / "runs"
 
     result = _run_cli(
         ["--dry-run", "--trials", "2", "--carla-present", "false", "--notes", "field set check"],
         cwd=REPO_ROOT,
+        runs_root=runs_root,
     )
     assert result.returncode == 0, result.stderr
 
-    after = set(_find_run_dirs(runs_root))
-    new_dirs = after - before
-    assert len(new_dirs) == 1
-    run_dir = new_dirs.pop()
+    run_dirs = _find_run_dirs(runs_root)
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
 
     with open(run_dir / "trials.json", encoding="utf-8") as f:
         trial_records = json.load(f)
@@ -127,6 +127,8 @@ def test_cli_trial_records_have_exact_twenty_key_set():
         "trial_index",
         "category",
         "all_violations",
+        "telemetry",
+        "profiler_response_content",
         "profiler_done_reason",
         "planner_done_reason",
         "planner_raw_response_repr",
@@ -145,23 +147,24 @@ def test_cli_trial_records_have_exact_twenty_key_set():
         "planner_eval_duration",
         "wall_clock_s",
     }
+    assert len(expected_keys) == 22
 
     for record in trial_records:
         assert set(record.keys()) == expected_keys
 
 
-def test_cli_output_files_are_utf8_without_bom():
-    runs_root = REPO_ROOT / "runs"
-    before = set(_find_run_dirs(runs_root))
+def test_cli_output_files_are_utf8_without_bom(tmp_path):
+    runs_root = tmp_path / "runs"
 
     result = _run_cli(
         ["--dry-run", "--trials", "1", "--carla-present", "false", "--notes", "bom check"],
         cwd=REPO_ROOT,
+        runs_root=runs_root,
     )
     assert result.returncode == 0, result.stderr
 
-    after = set(_find_run_dirs(runs_root))
-    run_dir = (after - before).pop()
+    run_dirs = _find_run_dirs(runs_root)
+    run_dir = run_dirs[0]
 
     for filename in ("run.json", "trials.json"):
         raw = (run_dir / filename).read_bytes()
@@ -169,27 +172,27 @@ def test_cli_output_files_are_utf8_without_bom():
         raw.decode("utf-8")  # must not raise
 
 
-def test_two_cli_runs_produce_distinct_run_dirs():
-    runs_root = REPO_ROOT / "runs"
-    before = set(_find_run_dirs(runs_root))
+def test_two_cli_runs_produce_distinct_run_dirs(tmp_path):
+    runs_root = tmp_path / "runs"
 
     result1 = _run_cli(
         ["--dry-run", "--trials", "1", "--carla-present", "false", "--notes", "first"],
         cwd=REPO_ROOT,
+        runs_root=runs_root,
     )
     assert result1.returncode == 0, result1.stderr
 
     result2 = _run_cli(
         ["--dry-run", "--trials", "1", "--carla-present", "false", "--notes", "second"],
         cwd=REPO_ROOT,
+        runs_root=runs_root,
     )
     assert result2.returncode == 0, result2.stderr
 
-    after = set(_find_run_dirs(runs_root))
-    new_dirs = after - before
-    assert len(new_dirs) == 2
+    run_dirs = _find_run_dirs(runs_root)
+    assert len(run_dirs) == 2
 
-    dir1, dir2 = sorted(new_dirs)
+    dir1, dir2 = run_dirs
     assert dir1 != dir2
     with open(dir1 / "run.json", encoding="utf-8") as f:
         record1 = json.load(f)

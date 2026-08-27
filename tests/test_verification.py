@@ -68,10 +68,12 @@ def test_written_trial_record_has_all_required_fields(tmp_path):
         "category",
         "all_violations",
         "wall_clock_s",
+        "telemetry",
+        "profiler_response_content",
     }
     missing = required_keys - set(record.keys())
     assert not missing, f"missing keys in written trial record: {missing}"
-    assert len(required_keys) == 20
+    assert len(required_keys) == 22
     assert set(record.keys()) == required_keys
 
     assert record["planner_total_duration"] == 123456
