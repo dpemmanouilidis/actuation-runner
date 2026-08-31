@@ -34,19 +34,33 @@ def _canonical(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
-def _telemetry_distance_m(index):
-    """Deterministic distance-to-hazard sequence (meters).
+_TELEMETRY_SEED = "actuation-runner-telemetry-v1"
 
-    Alternates each trial across the 10.0 m Blocked/Clear threshold so both
-    branches occur for any --trials >= 2. Placeholder for blocker 10's
-    scenario design, not a scenario design itself.
+
+def _telemetry_pseudo_unit(stream, index):
+    """Deterministic pseudo-random value in [0, 1) for a (stream, index) pair.
+
+    Uses sha256 rather than the `random` module so the sequence is stable
+    across processes and machines without relying on Mersenne Twister
+    implementation details, and uses a distinct `stream` tag per field so
+    speed and distance are independently derived from the same index.
     """
-    return 15.0 if index % 2 == 0 else 5.0
+    digest = hashlib.sha256(f"{_TELEMETRY_SEED}:{stream}:{index}".encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) / 0xFFFFFFFF
+
+
+def _telemetry_distance_m(index):
+    """Deterministic distance-to-hazard sequence (meters), 0.0-25.0 m.
+
+    Spans the 10.0 m Blocked/Clear threshold on both sides across trials,
+    independently of `_telemetry_speed_m_s` (distinct hash stream).
+    """
+    return round(_telemetry_pseudo_unit("distance", index) * 25.0, 1)
 
 
 def _telemetry_speed_m_s(index):
-    """Deterministic vehicle speed sequence (m/s)."""
-    return 16.0 + index * 0.5
+    """Deterministic vehicle speed sequence (m/s), 0.0-30.0 m/s inclusive."""
+    return round(_telemetry_pseudo_unit("speed", index) * 30.0, 2)
 
 
 def build_telemetry(index):

@@ -214,8 +214,73 @@ def test_config_hash_changes_when_telemetry_construction_changes(monkeypatch):
 # --- Part 1 (1e-c): telemetry reproduction fidelity --------------------------
 
 def test_build_telemetry_matches_carla_format_exactly():
-    assert runner.build_telemetry(0) == "Vehicle Speed: 16.00 m/s. Traffic: Clear. Distance to Hazard: 15.0m."
-    assert runner.build_telemetry(1) == "Vehicle Speed: 16.50 m/s. Traffic: Blocked. Distance to Hazard: 5.0m."
+    assert runner.build_telemetry(0) == "Vehicle Speed: 15.99 m/s. Traffic: Blocked. Distance to Hazard: 0.5m."
+    assert runner.build_telemetry(1) == "Vehicle Speed: 9.20 m/s. Traffic: Clear. Distance to Hazard: 10.4m."
+    assert runner.build_telemetry(6) == "Vehicle Speed: 6.43 m/s. Traffic: Blocked. Distance to Hazard: 1.5m."
+
+
+def test_build_telemetry_format_independent_of_values():
+    for index in (0, 1, 2, 6, 99):
+        text = runner.build_telemetry(index)
+        speed = runner._telemetry_speed_m_s(index)
+        distance = runner._telemetry_distance_m(index)
+        traffic_status = "Blocked" if distance < 10.0 else "Clear"
+        assert text.startswith(f"Vehicle Speed: {speed:.2f} m/s. ")
+        assert f"Traffic: {traffic_status}. " in text
+        assert text.endswith(f"Distance to Hazard: {distance:.1f}m.")
+        assert traffic_status in ("Blocked", "Clear")
+
+
+# --- Phase B/C: telemetry input design (B1-B4) --------------------------------
+
+def test_telemetry_speed_bounded_to_plausible_range():
+    speeds = [runner._telemetry_speed_m_s(i) for i in range(1000)]
+    assert all(0.0 <= s <= 30.0 for s in speeds)
+
+
+def test_telemetry_distance_spans_threshold_with_many_distinct_values():
+    distances = [runner._telemetry_distance_m(i) for i in range(100)]
+    assert len(set(distances)) >= 8
+    assert any(d < 10.0 for d in distances)
+    assert any(d >= 10.0 for d in distances)
+    assert any(9.0 <= d < 10.0 for d in distances)
+    assert any(10.0 <= d <= 11.0 for d in distances)
+
+
+def test_telemetry_branch_not_determined_by_index_parity():
+    distances = [runner._telemetry_distance_m(i) for i in range(100)]
+    even_blocked = {distances[i] < 10.0 for i in range(0, 100, 2)}
+    odd_blocked = {distances[i] < 10.0 for i in range(1, 100, 2)}
+    assert even_blocked == {True, False}
+    assert odd_blocked == {True, False}
+
+
+def test_telemetry_speed_and_distance_vary_independently():
+    speeds = [runner._telemetry_speed_m_s(i) for i in range(1000)]
+    distances = [runner._telemetry_distance_m(i) for i in range(1000)]
+    by_speed = {}
+    for speed, distance in zip(speeds, distances):
+        by_speed.setdefault(speed, set()).add(distance)
+    assert any(len(dists) > 1 for dists in by_speed.values())
+
+
+def test_telemetry_helpers_are_deterministic():
+    for index in (0, 1, 42, 500, 999):
+        assert runner._telemetry_speed_m_s(index) == runner._telemetry_speed_m_s(index)
+        assert runner._telemetry_distance_m(index) == runner._telemetry_distance_m(index)
+    assert runner._telemetry_speed_m_s(0) == 15.99
+    assert runner._telemetry_distance_m(0) == 0.5
+    assert runner._telemetry_speed_m_s(1) == 9.2
+    assert runner._telemetry_distance_m(1) == 10.4
+    assert runner._telemetry_speed_m_s(6) == 6.43
+    assert runner._telemetry_distance_m(6) == 1.5
+
+
+def test_telemetry_branch_balance_across_100_trials():
+    distances = [runner._telemetry_distance_m(i) for i in range(100)]
+    blocked = sum(1 for d in distances if d < 10.0)
+    clear = 100 - blocked
+    print(f"telemetry branch balance across 100 trials: Blocked={blocked} Clear={clear}")
 
 
 def test_summary_has_no_mean_and_no_bare_percent(tmp_path):
