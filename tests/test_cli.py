@@ -153,6 +153,36 @@ def test_cli_trial_records_have_exact_twenty_two_key_set(tmp_path):
         assert set(record.keys()) == expected_keys
 
 
+def test_cli_stdout_summary_reports_all_eight_categories_including_zeros(tmp_path):
+    runs_root = tmp_path / "runs"
+
+    result = _run_cli(
+        ["--dry-run", "--trials", "3", "--carla-present", "false", "--notes", "zero-count categories"],
+        cwd=REPO_ROOT,
+        runs_root=runs_root,
+    )
+    assert result.returncode == 0, result.stderr
+
+    stdout_lines = [line for line in result.stdout.splitlines() if line.strip()]
+    summary_line = stdout_lines[-1]
+    summary = json.loads(summary_line)
+
+    expected_categories = {
+        "pass",
+        "empty_response",
+        "malformed_json",
+        "missing_required_key",
+        "out_of_enum_mode",
+        "out_of_bounds_value",
+        "wrong_type",
+        "infrastructure_error",
+    }
+    assert set(summary["counts"].keys()) == expected_categories
+    assert summary["counts"]["pass"] == "3/3"
+    for cat in expected_categories - {"pass"}:
+        assert summary["counts"][cat] == "0/3"
+
+
 def test_cli_output_files_are_utf8_without_bom(tmp_path):
     runs_root = tmp_path / "runs"
 

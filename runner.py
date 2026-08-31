@@ -10,8 +10,6 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 
-import ollama
-
 import classify
 import subject
 
@@ -232,7 +230,7 @@ def run_trials(chain_fn, telemetries, run_id=None, envelope=None, notes="", run_
                 "profiler_done_reason": None,
                 "planner_done_reason": None,
                 "planner_raw_response_repr": repr(exc),
-                "planner_response_content_len": 0,
+                "planner_response_content_len": None,
                 **{f"profiler_{field}": None for field in TIMING_FIELDS},
                 **{f"planner_{field}": None for field in TIMING_FIELDS},
                 "wall_clock_s": wall_clock,
@@ -287,17 +285,27 @@ def _write_trial_records(run_dir, trial_records):
         json.dump(trial_records, f, indent=2)
 
 
+ALL_CATEGORIES = (
+    ["pass", "empty_response", "malformed_json"]
+    + classify._CATEGORY_ORDER
+    + ["infrastructure_error"]
+)
+
+
 def summarize(trial_records):
     """Build a summary: category counts as n/N, latency median/IQR. No mean, no bare percentages."""
     n_total = len(trial_records)
-    categories = {}
+    categories = {cat: 0 for cat in ALL_CATEGORIES}
     for record in trial_records:
         cat = record["category"]
         categories[cat] = categories.get(cat, 0) + 1
 
     counts = {cat: f"{count}/{n_total}" for cat, count in categories.items()}
 
-    wall_clocks = sorted(r["wall_clock_s"] for r in trial_records if r.get("wall_clock_s") is not None)
+    trial_ordered_wall_clocks = [
+        r["wall_clock_s"] for r in trial_records if r.get("wall_clock_s") is not None
+    ]
+    wall_clocks = sorted(trial_ordered_wall_clocks)
 
     def _quantile(data, q):
         if not data:
@@ -326,7 +334,7 @@ def summarize(trial_records):
         "counts": counts,
         "n_total": n_total,
         "latency": latency_summary,
-        "raw_wall_clocks_s": wall_clocks,
+        "raw_wall_clocks_s": trial_ordered_wall_clocks,
     }
 
 

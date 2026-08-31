@@ -88,6 +88,7 @@ def test_run_trials_mid_run_failure_produces_incomplete_run(tmp_path):
     infra_rows = [r for r in trial_records if r["category"] == "infrastructure_error"]
     assert len(infra_rows) == 1
     assert infra_rows[0]["trial_index"] == 2
+    assert infra_rows[0]["planner_response_content_len"] is None
 
     with open(tmp_path / "run.json", encoding="utf-8") as f:
         persisted = json.load(f)
@@ -281,6 +282,29 @@ def test_telemetry_branch_balance_across_100_trials():
     blocked = sum(1 for d in distances if d < 10.0)
     clear = 100 - blocked
     print(f"telemetry branch balance across 100 trials: Blocked={blocked} Clear={clear}")
+
+
+def test_summary_raw_wall_clocks_s_is_trial_ordered_not_sorted(tmp_path, monkeypatch):
+    contents = [VALID_PAYLOAD] * 4
+    chain_fn = _make_chain_fn(contents)
+
+    # perf_counter is read as `start` then `now - start` per trial; feeding a
+    # deliberately non-monotonic sequence of "now" readings produces known,
+    # non-sorted per-trial wall_clock_s values in trial order: 5, 1, 4, 2.
+    readings = iter([0.0, 5.0, 5.0, 6.0, 6.0, 10.0, 10.0, 12.0])
+
+    def fake_perf_counter():
+        return next(readings)
+
+    monkeypatch.setattr(runner.time, "perf_counter", fake_perf_counter)
+
+    _, trial_records = runner.run_trials(
+        chain_fn, telemetries=["t0", "t1", "t2", "t3"], run_dir=tmp_path
+    )
+    summary = runner.summarize(trial_records)
+
+    assert summary["raw_wall_clocks_s"] == [5.0, 1.0, 4.0, 2.0]
+    assert summary["raw_wall_clocks_s"] != sorted(summary["raw_wall_clocks_s"])
 
 
 def test_summary_has_no_mean_and_no_bare_percent(tmp_path):
