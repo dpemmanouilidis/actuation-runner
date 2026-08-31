@@ -214,9 +214,9 @@ def test_config_hash_changes_when_telemetry_construction_changes(monkeypatch):
 # --- Part 1 (1e-c): telemetry reproduction fidelity --------------------------
 
 def test_build_telemetry_matches_carla_format_exactly():
-    assert runner.build_telemetry(0) == "Vehicle Speed: 15.99 m/s. Traffic: Blocked. Distance to Hazard: 0.5m."
-    assert runner.build_telemetry(1) == "Vehicle Speed: 9.20 m/s. Traffic: Clear. Distance to Hazard: 10.4m."
-    assert runner.build_telemetry(6) == "Vehicle Speed: 6.43 m/s. Traffic: Blocked. Distance to Hazard: 1.5m."
+    assert runner.build_telemetry(0) == "Vehicle Speed: 15.99 m/s. Traffic: Blocked. Distance to Hazard: 0.4m."
+    assert runner.build_telemetry(1) == "Vehicle Speed: 9.20 m/s. Traffic: Blocked. Distance to Hazard: 8.3m."
+    assert runner.build_telemetry(6) == "Vehicle Speed: 6.43 m/s. Traffic: Blocked. Distance to Hazard: 1.2m."
 
 
 def test_build_telemetry_format_independent_of_values():
@@ -269,11 +269,11 @@ def test_telemetry_helpers_are_deterministic():
         assert runner._telemetry_speed_m_s(index) == runner._telemetry_speed_m_s(index)
         assert runner._telemetry_distance_m(index) == runner._telemetry_distance_m(index)
     assert runner._telemetry_speed_m_s(0) == 15.99
-    assert runner._telemetry_distance_m(0) == 0.5
+    assert runner._telemetry_distance_m(0) == 0.4
     assert runner._telemetry_speed_m_s(1) == 9.2
-    assert runner._telemetry_distance_m(1) == 10.4
+    assert runner._telemetry_distance_m(1) == 8.3
     assert runner._telemetry_speed_m_s(6) == 6.43
-    assert runner._telemetry_distance_m(6) == 1.5
+    assert runner._telemetry_distance_m(6) == 1.2
 
 
 def test_telemetry_branch_balance_across_100_trials():

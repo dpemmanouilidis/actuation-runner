@@ -50,12 +50,12 @@ def _telemetry_pseudo_unit(stream, index):
 
 
 def _telemetry_distance_m(index):
-    """Deterministic distance-to-hazard sequence (meters), 0.0-25.0 m.
+    """Deterministic distance-to-hazard sequence (meters), 0.0-20.0 m.
 
     Spans the 10.0 m Blocked/Clear threshold on both sides across trials,
     independently of `_telemetry_speed_m_s` (distinct hash stream).
     """
-    return round(_telemetry_pseudo_unit("distance", index) * 25.0, 1)
+    return round(_telemetry_pseudo_unit("distance", index) * 20.0, 1)
 
 
 def _telemetry_speed_m_s(index):
