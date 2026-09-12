@@ -96,7 +96,7 @@ default, or under the directory passed to `--runs-root`.
   and a catch-all, and the two are not distinguished at the return
   boundary.
 - One model, one prompt pair, one input distribution, one machine, two
-  runs of 100. Five categories were never observed to fire.
+  runs of 100. Six categories were never observed to fire.
 - The `run.json` `status` field conflates process completion with
   trial success; `utc_end` and `trials_completed` disambiguate it.
 - `carla_present` is recorded metadata and branches no logic.
