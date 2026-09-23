@@ -1,4 +1,6 @@
-actuation-runner
+# actuation-runner
+
+[![tests](https://github.com/dpemmanouilidis/actuation-runner/actions/workflows/tests.yml/badge.svg)](https://github.com/dpemmanouilidis/actuation-runner/actions/workflows/tests.yml)
 
 This project measures how often LLM-generated vehicle-actuation payloads
 fail before reaching an actuator, and decomposes those failures by
@@ -7,6 +9,14 @@ sentence-level assessment; a Planner model consumes that assessment and
 is required to emit a JSON payload matching a fixed schema. Each trial's
 Planner output is classified into one of eight categories describing
 whether, and how, it would have failed before actuation.
+
+**Result.** Across two runs of 100 trials each, 181/200 Planner payloads
+passed validation. All 19/200 failures were `empty_response`: the Planner
+call stopped at its length limit (`done_reason: length`) and returned an
+empty string. No payload was malformed, missing a key, out of enum, out of
+bounds or wrongly typed (0/200 each). Failures fell almost entirely on
+trials whose telemetry reported clear traffic (18/102) rather than blocked
+traffic (1/98).
 
 ## Categories
 
@@ -26,6 +36,12 @@ whether, and how, it would have failed before actuation.
   default fallthrough (see Limitations).
 - `infrastructure_error` -- the chain call itself raised an exception
   (e.g. an Ollama call failure) before any response was produced.
+
+Each category except `infrastructure_error` has a classifier test in
+[`tests/test_classify.py`](tests/test_classify.py), so the five classifier categories that
+never fired in the runs below are detectable, not merely defined.
+`infrastructure_error` is assigned by the runner, not the classifier. Of the
+two acceleration bounds, only the upper one is covered by a test.
 
 ## Results
 
@@ -74,10 +90,42 @@ it occurred. Profiler truncation (`done_reason: length`) occurred in
 7/200 trials and in every one of those 7 the trial still classified as
 `pass` -- profiler truncation did not cause a failure in either run.
 
+Raw records for both runs, as written by the runner, are in
+[`results/`](results/): `run.json` and all 100 per-trial records in
+`trials.json` for each.
+
+## Latency
+
+Seconds per trial, median (IQR), rounded to two decimals. Quartiles are
+computed with Python's `statistics.quantiles(..., method="inclusive")`, the
+method `runner.py` uses.
+
+| | run `d52279db` | run `85941c1e` |
+|---|---|---|
+| trial wall clock (both calls) | 34.42 (21.05) | 32.85 (25.55) |
+| Profiler call (`total_duration`) | 18.21 (11.47) | 16.34 (14.97) |
+| Planner call (`total_duration`) | 11.27 (20.22) | 9.74 (19.92) |
+
+Each run of 100 trials took about an hour (60 m 23 s and 59 m 11 s).
+
+## Setup
+
+Beelink GTi13 Ultra with an NVIDIA GeForce RTX 5070 (12 GB) in a Beelink EX
+dock. CARLA was not running. Hardware and the Ollama server version are not
+recorded in the run artefacts; the hardware is stated by the author, and
+the server version at the time of the runs is unknown.
+
 ## Reproduce
 
+Requires Python 3.12. Live runs also require [Ollama](https://ollama.com)
+running locally with the model pulled.
+
 ```
+python -m venv .venv
+.venv\Scripts\activate          # Windows; Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
+pytest -q                       # offline; Ollama not needed
+ollama pull qwen3.5:9b          # live runs only
 python runner.py --trials <N>
 ```
 
