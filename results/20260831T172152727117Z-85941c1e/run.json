@@ -1,0 +1,17 @@
+{
+  "run_id": "20260831T172152727117Z-85941c1e",
+  "utc_start": "2026-08-31T17:21:52.727117+00:00",
+  "utc_end": "2026-08-31T18:21:04.168263+00:00",
+  "status": "complete",
+  "trials_intended": 100,
+  "trials_completed": 100,
+  "config_hash": "89e6c0f44dfd342dfdcbb1ec4ed6e8f609feba6761956e22967016b70402df14",
+  "carla_present": "false",
+  "carla_map": "",
+  "carla_ticking": "false",
+  "notes": "phase C run 2",
+  "model": "qwen3.5:9b",
+  "ollama_client_version": "0.6.2",
+  "dry_run": false,
+  "dry_run_fail_at": null
+}
